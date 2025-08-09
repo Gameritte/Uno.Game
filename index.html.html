@@ -1,0 +1,396 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>UNO Canvas Game - Full Version</title>
+<style>
+  body {
+    background: #222;
+    color: #eee;
+    font-family: Arial, sans-serif;
+    text-align: center;
+    margin: 0; padding: 0;
+  }
+  #modeButtons {
+    margin: 10px;
+  }
+  button {
+    margin: 0 10px;
+    padding: 10px 20px;
+    font-size: 16px;
+    cursor: pointer;
+    border: none;
+    border-radius: 6px;
+    background: #4CAF50;
+    color: white;
+    transition: background 0.3s;
+  }
+  button:hover {
+    background: #45a049;
+  }
+  canvas {
+    background: #115511;
+    border: 3px solid #333;
+    display: block;
+    margin: 10px auto;
+    border-radius: 10px;
+  }
+</style>
+</head>
+<body>
+
+<h1>UNO Canvas Game - Full Version</h1>
+<div id="modeButtons">
+  <button onclick="startGame('classic')">Classic Mode</button>
+  <button onclick="startGame('mercy')">Mercy Mode</button>
+</div>
+<canvas id="gameCanvas" width="800" height="450"></canvas>
+
+<script>
+const canvas = document.getElementById('gameCanvas');
+const ctx = canvas.getContext('2d');
+
+const CARD_W = 60;
+const CARD_H = 90;
+const COLORS = ['red', 'yellow', 'green', 'blue'];
+const NUMBERS = [...Array(10).keys()]; // 0-9
+const SPECIALS = ['skip', 'reverse', 'draw2'];
+
+// Game variables
+let playerHand = [];
+let botHand = [];
+let discardPile = [];
+let drawPile = [];
+let currentPlayer = 'player'; // 'player' or 'bot'
+let currentColor = null;
+let currentNumber = null;
+let direction = 1; // 1 or -1 (mostly for multi-player, just keep 1 here)
+let gameMode = 'classic';
+let message = '';
+let botThinking = false;
+let gameOver = false;
+
+// --- Deck creation and shuffle ---
+function createDeck() {
+  const deck = [];
+  for (let color of COLORS) {
+    for (let num of NUMBERS) {
+      deck.push({color, type:'number', number: num});
+      if(num !== 0) deck.push({color, type:'number', number: num}); // double except zero
+    }
+    for (let sp of SPECIALS) {
+      deck.push({color, type: sp});
+      deck.push({color, type: sp});
+    }
+  }
+  for (let i=0; i<4; i++) {
+    deck.push({color: 'wild', type: 'wild'});
+    deck.push({color: 'wild', type: 'wild_draw4'});
+  }
+  return deck;
+}
+
+function shuffle(deck) {
+  for (let i = deck.length -1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i +1));
+    [deck[i], deck[j]] = [deck[j], deck[i]];
+  }
+  return deck;
+}
+
+// --- Drawing cards ---
+function drawCard(hand, n=1) {
+  for(let i=0; i<n; i++) {
+    if(drawPile.length === 0) {
+      if(discardPile.length <= 1) {
+        message = "No cards left to draw!";
+        return;
+      }
+      const last = discardPile.pop();
+      drawPile = shuffle(discardPile);
+      discardPile = [last];
+    }
+    hand.push(drawPile.pop());
+  }
+}
+
+// --- Check if a card can be played ---
+function canPlay(card) {
+  const top = discardPile[discardPile.length - 1];
+  if(card.color === 'wild') return true;
+  if(card.color === currentColor) return true;
+  if(card.type === 'number' && card.number === currentNumber) return true;
+  if(card.type === top.type && card.type !== 'number') return true;
+  return false;
+}
+
+// --- Play a card ---
+function playCard(hand, cardIndex, player = 'player') {
+  if(gameOver) return false;
+
+  const card = hand[cardIndex];
+  if(!canPlay(card)) {
+    if(player === 'player') message = "Can't play that card!";
+    return false;
+  }
+
+  hand.splice(cardIndex, 1);
+  discardPile.push(card);
+
+  // Set current color and number
+  if(card.color === 'wild') {
+    if(player === 'player') {
+      let newColor = prompt('Pick a color: red, yellow, green, blue').toLowerCase();
+      if(COLORS.includes(newColor)) {
+        currentColor = newColor;
+      } else {
+        currentColor = COLORS[Math.floor(Math.random()*4)];
+      }
+    } else {
+      // Bot picks most frequent color in hand or random
+      const counts = {};
+      for(let c of COLORS) counts[c] = 0;
+      for(let c of botHand) {
+        if(COLORS.includes(c.color)) counts[c.color]++;
+      }
+      currentColor = COLORS.reduce((a,b) => counts[a] > counts[b] ? a : b);
+    }
+    currentNumber = null;
+  } else {
+    currentColor = card.color;
+    currentNumber = card.type === 'number' ? card.number : null;
+  }
+
+  // Handle special cards
+  if(card.type === 'skip') {
+    message = `${player} played SKIP!`;
+    currentPlayer = player; // skip next player's turn
+  } else if(card.type === 'reverse') {
+    message = `${player} played REVERSE!`;
+    direction *= -1;
+  } else if(card.type === 'draw2') {
+    message = `${player} played DRAW 2! Opponent draws 2 and skips turn.`;
+    if(player === 'player') {
+      drawCard(botHand, 2);
+      currentPlayer = 'player';
+    } else {
+      drawCard(playerHand, 2);
+      currentPlayer = 'bot';
+    }
+  } else if(card.type === 'wild_draw4') {
+    message = `${player} played WILD DRAW 4! Opponent draws 4 and skips turn.`;
+    if(player === 'player') {
+      drawCard(botHand, 4);
+      currentPlayer = 'player';
+    } else {
+      drawCard(playerHand, 4);
+      currentPlayer = 'bot';
+    }
+  } else {
+    // Normal play: just switch player
+    currentPlayer = player === 'player' ? 'bot' : 'player';
+  }
+  return true;
+}
+
+// --- Bot logic ---
+function botTurn() {
+  if(gameOver || currentPlayer !== 'bot') return;
+  botThinking = true;
+  message = 'Bot is thinking...';
+  draw();
+
+  setTimeout(() => {
+    let playableIndexes = [];
+    for(let i=0; i<botHand.length; i++) {
+      if(canPlay(botHand[i])) playableIndexes.push(i);
+    }
+    if(playableIndexes.length === 0) {
+      drawCard(botHand);
+      message = 'Bot draws a card.';
+      currentPlayer = 'player';
+      botThinking = false;
+      draw();
+      return;
+    }
+
+    let chosenIndex;
+    if(gameMode === 'mercy') {
+      chosenIndex = playableIndexes[0];
+    } else {
+      playableIndexes.sort((a,b) => {
+        const cA = botHand[a], cB = botHand[b];
+        const valA = cA.type === 'number' ? cA.number : 20;
+        const valB = cB.type === 'number' ? cB.number : 20;
+        return valB - valA;
+      });
+      chosenIndex = playableIndexes[0];
+    }
+
+    playCard(botHand, chosenIndex, 'bot');
+    botThinking = false;
+    draw();
+
+    if(botHand.length === 0) {
+      message = 'Bot wins! Game Over.';
+      gameOver = true;
+      return;
+    }
+
+    if(currentPlayer === 'bot') botTurn();
+  }, 1200);
+}
+
+// --- Player clicks to play ---
+canvas.addEventListener('click', e => {
+  if(gameOver) return;
+  if(currentPlayer !== 'player' || botThinking) return;
+
+  const rect = canvas.getBoundingClientRect();
+  const mx = e.clientX - rect.left;
+  const my = e.clientY - rect.top;
+
+  const startX = (canvas.width - playerHand.length * (CARD_W + 10)) / 2;
+  const y = canvas.height - CARD_H - 20;
+
+  for(let i=0; i<playerHand.length; i++) {
+    let x = startX + i * (CARD_W + 10);
+    if(mx >= x && mx <= x + CARD_W && my >= y && my <= y + CARD_H) {
+      if(playCard(playerHand, i, 'player')) {
+        if(playerHand.length === 0) {
+          message = 'You win! Game Over.';
+          gameOver = true;
+          draw();
+          return;
+        }
+        draw();
+        if(currentPlayer === 'bot') botTurn();
+      } else {
+        draw();
+      }
+      break;
+    }
+  }
+});
+
+// --- Drawing cards on canvas ---
+function drawCardOnCanvas(card, x, y, faceUp=true) {
+  ctx.fillStyle = faceUp ? card.color : '#222';
+  ctx.strokeStyle = '#000';
+  ctx.lineWidth = 3;
+  ctx.fillRect(x, y, CARD_W, CARD_H);
+  ctx.strokeRect(x, y, CARD_W, CARD_H);
+
+  ctx.fillStyle = faceUp ? '#fff' : '#666';
+  ctx.font = 'bold 22px Arial';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+
+  if(!faceUp) {
+    ctx.fillText('UNO', x + CARD_W/2, y + CARD_H/2);
+    return;
+  }
+
+  if(card.type === 'number') {
+    ctx.fillText(card.number, x + CARD_W/2, y + CARD_H/2);
+  } else if(card.type === 'skip') {
+    ctx.fillText('SKIP', x + CARD_W/2, y + CARD_H/2);
+  } else if(card.type === 'reverse') {
+    ctx.fillText('REV', x + CARD_W/2, y + CARD_H/2);
+  } else if(card.type === 'draw2') {
+    ctx.fillText('+2', x + CARD_W/2, y + CARD_H/2);
+  } else if(card.type === 'wild') {
+    ctx.fillText('WILD', x + CARD_W/2, y + CARD_H/2);
+  } else if(card.type === 'wild_draw4') {
+    ctx.fillText('+4', x + CARD_W/2, y + CARD_H/2);
+  }
+}
+
+// --- Draw everything ---
+function draw() {
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+  // Draw discard pile
+  ctx.fillStyle = '#222';
+  ctx.fillRect(canvas.width/2 - CARD_W/2 - 12, canvas.height/2 - CARD_H/2 - 12, CARD_W + 24, CARD_H + 24);
+  if(discardPile.length > 0) {
+    drawCardOnCanvas(discardPile[discardPile.length -1], canvas.width/2 - CARD_W/2, canvas.height/2 - CARD_H/2);
+  }
+  ctx.fillStyle = '#fff';
+  ctx.font = '20px Arial';
+  ctx.textAlign = 'center';
+  ctx.fillText('Discard Pile', canvas.width/2, canvas.height/2 + CARD_H + 30);
+
+  // Draw draw pile (back)
+  ctx.fillStyle = '#222';
+  ctx.fillRect(canvas.width/2 - CARD_W*2, canvas.height/2 - CARD_H/2 - 12, CARD_W, CARD_H);
+  ctx.fillStyle = '#666';
+  ctx.font = 'bold 18px Arial';
+  ctx.fillText('DRAW', canvas.width/2 - CARD_W*2 + CARD_W/2, canvas.height/2 + CARD_H/2 - 12);
+
+  // Player hand
+  let startX = (canvas.width - playerHand.length * (CARD_W + 10)) / 2;
+  let y = canvas.height - CARD_H - 20;
+  for(let i=0; i<playerHand.length; i++) {
+    drawCardOnCanvas(playerHand[i], startX + i * (CARD_W + 10), y, true);
+  }
+  ctx.fillStyle = '#fff';
+  ctx.font = '18px Arial';
+  ctx.fillText('Your Hand', canvas.width/2, y + CARD_H + 40);
+
+  // Bot hand (face down)
+  let botStartX = (canvas.width - botHand.length * (CARD_W + 10)) / 2;
+  let botY = 20;
+  for(let i=0; i<botHand.length; i++) {
+    drawCardOnCanvas(botHand[i], botStartX + i * (CARD_W + 10), botY, false);
+  }
+  ctx.fillText('Bot Hand', canvas.width/2, botY + CARD_H + 40);
+
+  // Message
+  ctx.fillStyle = '#fff';
+  ctx.font = '18px Arial';
+  ctx.fillText(message, canvas.width/2, canvas.height/2 + CARD_H + 70);
+
+  // Current turn & color
+  ctx.fillText(`Turn: ${currentPlayer.toUpperCase()} | Color: ${currentColor ? currentColor.toUpperCase() : 'N/A'}`, canvas.width/2, canvas.height/2 + CARD_H + 100);
+}
+
+// --- Start a new game ---
+function startGame(mode = 'classic') {
+  gameMode = mode;
+  drawPile = shuffle(createDeck());
+  playerHand = [];
+  botHand = [];
+  discardPile = [];
+  currentPlayer = 'player';
+  currentColor = null;
+  currentNumber = null;
+  direction = 1;
+  message = 'Game started! Your turn.';
+  botThinking = false;
+  gameOver = false;
+
+  drawCard(playerHand, 7);
+  drawCard(botHand, 7);
+
+  // Draw first card (no wilds or wild draw 4)
+  let first;
+  do {
+    first = drawPile.pop();
+  } while(first.type === 'wild' || first.type === 'wild_draw4');
+  discardPile.push(first);
+  currentColor = first.color;
+  currentNumber = first.type === 'number' ? first.number : null;
+
+  draw();
+
+  if(currentPlayer === 'bot') botTurn();
+}
+
+// Start the game in classic mode by default
+startGame('classic');
+</script>
+
+</body>
+</html>
